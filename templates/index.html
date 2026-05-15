@@ -1,0 +1,158 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>El Jurado de la Representación</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <header>
+    <img class="logo" src="/static/logo.png" alt="Logo">
+    <h1>El Jurado de la Representación</h1>
+  </header>
+  <main>
+
+    <!-- State: idle -->
+    <div class="waiting" id="s-idle">
+      <div class="spinner"></div>
+      <p>Esperando que empiece la sesión…</p>
+    </div>
+
+    <!-- State: generating -->
+    <div class="waiting" id="s-generating" style="display:none">
+      <div class="spinner"></div>
+      <p>Generando imágenes…</p>
+      <p class="gen-counter" id="gen-counter">0 / 0</p>
+    </div>
+
+    <!-- State: done -->
+    <div id="s-done" style="display:none">
+      <div class="image-grid" id="image-grid"></div>
+      <div class="vote-card">
+        <h3>Valora este conjunto de imágenes</h3>
+        <div id="criteria"></div>
+        <button class="submit-btn" id="submit-btn">Enviar valoración</button>
+      </div>
+    </div>
+
+  </main>
+
+  <script>
+    // Stable ID for this browser session — persists across page refreshes, resets on new tab
+    if (!sessionStorage.getItem('session_id')) {
+      sessionStorage.setItem('session_id', crypto.randomUUID());
+    }
+    const SESSION_ID = sessionStorage.getItem('session_id');
+
+    const CRITERIA = [
+      { id: 'realismo',            label: 'Realismo' },
+      { id: 'estereotipos_genero', label: 'Ausencia/presencia de estereotipos respecto al género' },
+      { id: 'franjas_edad',        label: 'Representación de diferentes franjas de edad' },
+      { id: 'justicia_general',    label: 'Justicia general' },
+      { id: 'estereotipos_raza',   label: 'Ausencia/presencia de estereotipos respecto a la raza' },
+      { id: 'estereotipos_clase',  label: 'Ausencia/presencia de estereotipos respecto a la clase' },
+    ];
+
+    const criteriaEl = document.getElementById('criteria');
+    CRITERIA.forEach(c => {
+      const div = document.createElement('div');
+      div.className = 'criterion';
+      div.innerHTML = `<span class="criterion-label">${c.label}</span>
+        <div class="scale-row" data-cid="${c.id}">
+          ${['N/A',1,2,3,4,5,6,7,8,9,10].map((v,i) =>
+            `<button class="sbt${i===0?' on':''}" data-v="${v}">${v}</button>`
+          ).join('')}
+        </div>`;
+      criteriaEl.appendChild(div);
+    });
+
+    criteriaEl.addEventListener('click', e => {
+      const btn = e.target.closest('.sbt');
+      if (!btn) return;
+      const row = btn.closest('.scale-row');
+      row.querySelectorAll('.sbt').forEach(b => b.classList.remove('on'));
+      btn.classList.add('on');
+    });
+
+    function getScores() {
+      const s = {};
+      criteriaEl.querySelectorAll('.scale-row').forEach(row => {
+        const on = row.querySelector('.sbt.on');
+        s[row.dataset.cid] = on ? on.dataset.v : 'N/A';
+      });
+      return s;
+    }
+
+    function show(id) {
+      ['s-idle','s-generating','s-done'].forEach(s =>
+        document.getElementById(s).style.display = s === id ? (id === 's-done' ? 'block' : 'flex') : 'none'
+      );
+    }
+
+    function renderGrid(images) {
+      const grid = document.getElementById('image-grid');
+      grid.innerHTML = '';
+      const cols = images.length === 1 ? 1 : images.length === 2 ? 2 : 3;
+      grid.style.gridTemplateColumns = `repeat(${cols}, 1fr)`;
+      images.forEach(img => {
+        const cell = document.createElement('div');
+        cell.className = 'img-cell';
+        cell.innerHTML = `<img src="${img.url}" alt="">
+          <p class="img-caption">${img.prompt}</p>`;
+        grid.appendChild(cell);
+      });
+    }
+
+    document.getElementById('submit-btn').addEventListener('click', async () => {
+      const btn = document.getElementById('submit-btn');
+      btn.disabled = true;
+      try {
+        await fetch('/api/vote', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ scores: getScores(), client_session_id: SESSION_ID }),
+        });
+        btn.textContent = 'Valorado ✓';
+      } catch {
+        btn.disabled = false;
+        btn.textContent = 'Error — inténtalo de nuevo';
+      }
+    });
+
+    let lastStatus = null;
+
+    async function poll() {
+      try {
+        const data = await fetch('/api/state').then(r => r.json());
+        const valid = data.images.filter(i => i.url);
+
+        if (data.status === 'idle') {
+          if (lastStatus !== 'idle') {
+            show('s-idle');
+            // reset form
+            document.getElementById('submit-btn').textContent = 'Enviar valoración';
+            document.getElementById('submit-btn').disabled = false;
+            criteriaEl.querySelectorAll('.scale-row').forEach(row =>
+              row.querySelectorAll('.sbt').forEach((b, i) => b.classList.toggle('on', i === 0))
+            );
+          }
+        } else if (data.status === 'generating') {
+          show('s-generating');
+          document.getElementById('gen-counter').textContent =
+            `${data.images.length} / ${data.total}`;
+        } else if (data.status === 'done') {
+          if (lastStatus !== 'done') {
+            renderGrid(valid);
+            show('s-done');
+          }
+        }
+        lastStatus = data.status;
+      } catch { /* retry */ }
+      setTimeout(poll, 2000);
+    }
+
+    poll();
+  </script>
+</body>
+</html>

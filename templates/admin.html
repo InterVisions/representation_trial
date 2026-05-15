@@ -1,0 +1,170 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Representation Trial — Admin</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <header>
+    <img class="logo" src="/static/logo.png" alt="Logo">
+    <h1>Representation Trial</h1>
+    <span class="badge">Admin</span>
+    <div class="log-btns">
+      <a class="log-btn" href="/admin/logs/admin"   download>&#8659; Admin log</a>
+      <a class="log-btn" href="/admin/logs/public"  download>&#8659; Public log</a>
+    </div>
+  </header>
+  <main>
+
+    <!-- Prompt entry (always visible) -->
+    <div class="admin-section">
+      <div class="model-row">
+        <label for="model-select">Model</label>
+        <select id="model-select"></select>
+      </div>
+      <h2>Prompts</h2>
+      <div class="prompt-list" id="prompt-list">
+        <div class="prompt-row">
+          <textarea placeholder="Describe the image to generate…" rows="2"></textarea>
+        </div>
+      </div>
+      <div class="btn-row">
+        <button class="btn btn-ghost" id="add-btn">+ Add prompt</button>
+        <button class="btn btn-primary" id="gen-btn">&#9654; Generate images</button>
+        <button class="btn btn-ghost" id="reset-btn">Reset session</button>
+        <span class="status-pill pill-idle" id="status-pill">
+          <span class="dot"></span><span id="status-text">Idle</span>
+        </span>
+      </div>
+    </div>
+
+    <!-- State: generating -->
+    <div class="waiting" id="s-generating" style="display:none">
+      <div class="spinner"></div>
+      <p>Generating images…</p>
+      <p class="gen-counter" id="gen-counter">0 / 0</p>
+    </div>
+
+    <!-- State: done -->
+    <div id="s-done" style="display:none; padding: 1.2rem;">
+      <div class="image-grid" id="image-grid"></div>
+    </div>
+
+  </main>
+
+  <script>
+    document.getElementById('add-btn').addEventListener('click', () => {
+      const list = document.getElementById('prompt-list');
+      const row = document.createElement('div');
+      row.className = 'prompt-row';
+      row.innerHTML = `<textarea placeholder="Describe the image to generate…" rows="2"></textarea>
+        <button class="rm-btn" title="Remove">×</button>`;
+      row.querySelector('.rm-btn').addEventListener('click', () => row.remove());
+      list.appendChild(row);
+      row.querySelector('textarea').focus();
+    });
+
+    // Populate model selector
+    fetch('/api/presets').then(r => r.json()).then(presets => {
+      const sel = document.getElementById('model-select');
+      presets.forEach(p => {
+        const opt = document.createElement('option');
+        opt.value = p.id;
+        opt.textContent = p.label;
+        sel.appendChild(opt);
+      });
+    });
+
+    document.getElementById('gen-btn').addEventListener('click', async () => {
+      const prompts = [...document.querySelectorAll('#prompt-list textarea')]
+        .map(t => t.value.trim()).filter(Boolean);
+      if (!prompts.length) { alert('Add at least one prompt.'); return; }
+      const preset = document.getElementById('model-select').value;
+      document.getElementById('gen-btn').disabled = true;
+      try {
+        const res = await fetch('/api/generate', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ prompts, preset }),
+        });
+        const d = await res.json();
+        if (!res.ok) alert(d.error || 'Error starting generation.');
+      } catch { alert('Request failed.'); }
+      document.getElementById('gen-btn').disabled = false;
+    });
+
+    document.getElementById('reset-btn').addEventListener('click', async () => {
+      if (!confirm('Reset the session? All images and votes will be cleared.')) return;
+      await fetch('/api/reset', { method: 'POST' });
+    });
+
+    function showSection(id) {
+      ['s-generating','s-done'].forEach(s => {
+        const el = document.getElementById(s);
+        el.style.display = s === id ? (id === 's-done' ? 'block' : 'flex') : 'none';
+      });
+    }
+
+    function renderGrid(images) {
+      const grid = document.getElementById('image-grid');
+      grid.innerHTML = '';
+      const cols = images.length === 1 ? 1 : images.length === 2 ? 2 : 3;
+      grid.style.gridTemplateColumns = `repeat(${cols}, 1fr)`;
+      images.forEach(img => {
+        const cell = document.createElement('div');
+        cell.className = 'img-cell';
+        cell.innerHTML = `<img src="${img.url}" alt="">
+          <p class="img-caption">${img.prompt}</p>`;
+        grid.appendChild(cell);
+      });
+    }
+
+    function setStatus(status, done, total) {
+      const pill = document.getElementById('status-pill');
+      const dot  = pill.querySelector('.dot');
+      const txt  = document.getElementById('status-text');
+      pill.className = 'status-pill';
+      dot.className  = 'dot';
+      if (status === 'generating') {
+        pill.classList.add('pill-gen'); dot.classList.add('dot-gen');
+        txt.textContent = `Generating… ${done} / ${total}`;
+      } else if (status === 'done') {
+        pill.classList.add('pill-done');
+        txt.textContent = `Done — ${done} image${done !== 1 ? 's' : ''}`;
+      } else {
+        pill.classList.add('pill-idle');
+        txt.textContent = 'Idle';
+      }
+    }
+
+    let lastStatus = null;
+
+    async function poll() {
+      try {
+        const data = await fetch('/api/state').then(r => r.json());
+        const valid = data.images.filter(i => i.url);
+        setStatus(data.status, valid.length, data.total);
+
+        if (data.status === 'idle') {
+          showSection(null);
+        } else if (data.status === 'generating') {
+          showSection('s-generating');
+          document.getElementById('gen-counter').textContent =
+            `${data.images.length} / ${data.total}`;
+        } else if (data.status === 'done') {
+          if (lastStatus !== 'done') {
+            renderGrid(valid);
+            showSection('s-done');
+          }
+        }
+        lastStatus = data.status;
+      } catch { /* ignore */ }
+      setTimeout(poll, 2000);
+    }
+
+    poll();
+  </script>
+</body>
+</html>
