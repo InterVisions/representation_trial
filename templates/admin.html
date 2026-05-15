@@ -96,7 +96,7 @@
     });
 
     document.getElementById('reset-btn').addEventListener('click', async () => {
-      if (!confirm('Reset the session? All images and votes will be cleared.')) return;
+      if (!confirm('Reset the session? Images will be removed and the current session cleared. Logs are always kept on the server.')) return;
       await fetch('/api/reset', { method: 'POST' });
     });
 
