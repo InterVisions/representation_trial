@@ -129,6 +129,20 @@ def _append_log(path, entry):
 
 
 # ── Image generation ───────────────────────────────────────────────────────────
+def _save_image(img_id, b64_data=None, remote_url=None):
+    """Write image to IMAGES_DIR from either b64 data or a remote URL. Returns local static path."""
+    path = os.path.join(IMAGES_DIR, f"{img_id}.png")
+    if b64_data:
+        with open(path, "wb") as fh:
+            fh.write(base64.b64decode(b64_data))
+    elif remote_url:
+        img_resp = http.get(remote_url, timeout=60)
+        img_resp.raise_for_status()
+        with open(path, "wb") as fh:
+            fh.write(img_resp.content)
+    return f"/static/images/{img_id}.png"
+
+
 def _generate_one(prompt, img_id, preset, api_key):
     url = None
     try:
@@ -143,16 +157,13 @@ def _generate_one(prompt, img_id, preset, api_key):
             resp.raise_for_status()
             data = resp.json()
             if "images" in data:
-                url = data["images"][0]["url"]
+                url = _save_image(img_id, remote_url=data["images"][0]["url"])
             elif "data" in data:
                 img = data["data"][0]
                 if img.get("b64_json"):
-                    path = os.path.join(IMAGES_DIR, f"{img_id}.png")
-                    with open(path, "wb") as fh:
-                        fh.write(base64.b64decode(img["b64_json"]))
-                    url = f"/static/images/{img_id}.png"
-                else:
-                    url = img.get("url")
+                    url = _save_image(img_id, b64_data=img["b64_json"])
+                elif img.get("url"):
+                    url = _save_image(img_id, remote_url=img["url"])
             else:
                 print(f"[generation error] unexpected response shape: {list(data.keys())}")
 
@@ -165,12 +176,9 @@ def _generate_one(prompt, img_id, preset, api_key):
             resp.raise_for_status()
             img_data = resp.json()["data"][0]
             if img_data.get("b64_json"):
-                path = os.path.join(IMAGES_DIR, f"{img_id}.png")
-                with open(path, "wb") as fh:
-                    fh.write(base64.b64decode(img_data["b64_json"]))
-                url = f"/static/images/{img_id}.png"
-            else:
-                url = img_data.get("url")
+                url = _save_image(img_id, b64_data=img_data["b64_json"])
+            elif img_data.get("url"):
+                url = _save_image(img_id, remote_url=img_data["url"])
 
     except Exception as exc:
         print(f"[generation error] {prompt!r}: {exc}")
